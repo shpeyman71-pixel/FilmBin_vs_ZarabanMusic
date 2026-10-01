@@ -5,16 +5,25 @@ from datetime import datetime, timedelta, timezone
 
 import psycopg2
 
-from telegram import Update, ChatPermissions
+from telegram import (
+    Update,
+    ChatPermissions,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+)
+
 from telegram.constants import ChatMemberStatus
+
 from telegram.ext import (
     Application,
     CommandHandler,
     ChatMemberHandler,
+    CallbackQueryHandler,
     ContextTypes,
     MessageHandler,
     filters,
 )
+
 
 # =========================================================
 # CONFIG
@@ -26,6 +35,11 @@ ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 
 # حذف پیام خوش‌آمدگویی بعد از 3 دقیقه
 WELCOME_DELETE_SECONDS = 180
+
+
+# =========================================================
+# LOGGING
+# =========================================================
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -55,6 +69,7 @@ def get_db():
 
 
 def init_db():
+
     conn = get_db()
     cur = conn.cursor()
 
@@ -78,6 +93,7 @@ def init_db():
     """)
 
     conn.commit()
+
     cur.close()
     conn.close()
 
@@ -85,6 +101,7 @@ def init_db():
 
 
 def add_warning(chat_id, user_id, admin_id, reason):
+
     conn = get_db()
     cur = conn.cursor()
 
@@ -94,15 +111,22 @@ def add_warning(chat_id, user_id, admin_id, reason):
         (chat_id, user_id, admin_id, reason)
         VALUES (%s, %s, %s, %s)
         """,
-        (chat_id, user_id, admin_id, reason),
+        (
+            chat_id,
+            user_id,
+            admin_id,
+            reason,
+        ),
     )
 
     conn.commit()
+
     cur.close()
     conn.close()
 
 
 def get_warning_count(chat_id, user_id):
+
     conn = get_db()
     cur = conn.cursor()
 
@@ -110,9 +134,13 @@ def get_warning_count(chat_id, user_id):
         """
         SELECT COUNT(*)
         FROM warnings
-        WHERE chat_id = %s AND user_id = %s
+        WHERE chat_id = %s
+        AND user_id = %s
         """,
-        (chat_id, user_id),
+        (
+            chat_id,
+            user_id,
+        ),
     )
 
     count = cur.fetchone()[0]
@@ -124,18 +152,24 @@ def get_warning_count(chat_id, user_id):
 
 
 def clear_warnings(chat_id, user_id):
+
     conn = get_db()
     cur = conn.cursor()
 
     cur.execute(
         """
         DELETE FROM warnings
-        WHERE chat_id = %s AND user_id = %s
+        WHERE chat_id = %s
+        AND user_id = %s
         """,
-        (chat_id, user_id),
+        (
+            chat_id,
+            user_id,
+        ),
     )
 
     conn.commit()
+
     cur.close()
     conn.close()
 
@@ -145,17 +179,12 @@ def clear_warnings(chat_id, user_id):
 # =========================================================
 
 async def is_admin(update: Update, user_id: int = None):
-    """
-    بررسی مدیر بودن کاربر:
-
-    1. ADMIN_ID در Railway = مدیر اصلی
-    2. مدیران واقعی گروه نیز مدیر محسوب می‌شوند
-    """
 
     if not update.effective_chat:
         return False
 
     if user_id is None:
+
         if not update.effective_user:
             return False
 
@@ -166,7 +195,10 @@ async def is_admin(update: Update, user_id: int = None):
         return True
 
     try:
-        member = await update.effective_chat.get_member(user_id)
+
+        member = await update.effective_chat.get_member(
+            user_id
+        )
 
         return member.status in (
             ChatMemberStatus.ADMINISTRATOR,
@@ -174,14 +206,21 @@ async def is_admin(update: Update, user_id: int = None):
         )
 
     except Exception as e:
-        logger.error("Admin check error: %s", e)
+
+        logger.error(
+            "Admin check error: %s",
+            e,
+        )
+
         return False
 
 
 async def require_admin(update: Update):
+
     if not await is_admin(update):
 
         if update.message:
+
             await update.message.reply_text(
                 "⛔ این دستور فقط برای مدیران گروه است."
             )
@@ -191,19 +230,47 @@ async def require_admin(update: Update):
     return True
 
 
+async def query_user_is_admin(
+    query,
+    user_id,
+):
+
+    # ADMIN_ID
+    if ADMIN_ID and user_id == ADMIN_ID:
+        return True
+
+    try:
+
+        member = await query.message.chat.get_member(
+            user_id
+        )
+
+        return member.status in (
+            ChatMemberStatus.ADMINISTRATOR,
+            ChatMemberStatus.OWNER,
+        )
+
+    except Exception as e:
+
+        logger.error(
+            "Callback admin check error: %s",
+            e,
+        )
+
+        return False
+
+
 # =========================================================
 # TARGET USER
 # =========================================================
 
 def get_target_user(message):
-    """
-    کاربر هدف از طریق Reply مشخص می‌شود.
-    """
 
     if not message:
         return None
 
     if message.reply_to_message:
+
         return message.reply_to_message.from_user
 
     return None
@@ -223,12 +290,14 @@ async def delete_after_delay(
     await asyncio.sleep(seconds)
 
     try:
+
         await context.bot.delete_message(
             chat_id=chat_id,
             message_id=message_id,
         )
 
     except Exception as e:
+
         logger.info(
             "Could not delete message: %s",
             e,
@@ -279,51 +348,53 @@ async def help_command(
 
 🛡️ دستورات مدیران:
 
+/panel
+پنل مدیریت
+
 /warn
-اخطار به کاربر
+اخطار
 
 /warnings
-مشاهده تعداد اخطار
+تعداد اخطار
 
 /clearwarn
 پاک کردن اخطارها
 
 /mute
-میوت کاربر
+میوت
 
 /unmute
 رفع میوت
 
 /ban
-مسدود کردن کاربر
+بن
 
 /unban
-رفع مسدودی
+رفع بن
 
 /kick
-اخراج کاربر
+اخراج
 
 /del
 حذف پیام
 
 /members
-تعداد اعضای گروه
+تعداد اعضا
 
 /admins
-لیست مدیران
+مدیران
 
 /rules
-قوانین گروه
+قوانین
 
 /id
-نمایش آیدی
+آیدی
 
 ━━━━━━━━━━━━━━
 
 📌 برای دستورات مدیریتی:
 روی پیام کاربر Reply کنید.
 """
-
 
     await update.message.reply_text(text)
 
@@ -346,13 +417,11 @@ async def new_member(
     new_status = result.new_chat_member.status
 
     if (
-        old_status
-        in (
+        old_status in (
             ChatMemberStatus.LEFT,
             ChatMemberStatus.BANNED,
         )
-        and new_status
-        in (
+        and new_status in (
             ChatMemberStatus.MEMBER,
             ChatMemberStatus.RESTRICTED,
         )
@@ -514,7 +583,6 @@ async def warn_command(
         f"📝 دلیل: {reason}"
     )
 
-    # 3 اخطار = میوت 1 ساعت
     if count >= 3:
 
         until_date = (
@@ -546,10 +614,6 @@ async def warn_command(
                 e,
             )
 
-            await message.reply_text(
-                "⚠️ اخطار ثبت شد، اما میوت خودکار انجام نشد."
-            )
-
 
 # =========================================================
 # WARNINGS
@@ -559,9 +623,6 @@ async def warnings_command(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
 ):
-
-    if not update.message:
-        return
 
     target = get_target_user(update.message)
 
@@ -622,6 +683,28 @@ async def clearwarn_command(
 # MUTE
 # =========================================================
 
+async def mute_user(
+    bot,
+    chat_id,
+    user_id,
+    minutes,
+):
+
+    until_date = (
+        datetime.now(timezone.utc)
+        + timedelta(minutes=minutes)
+    )
+
+    await bot.restrict_chat_member(
+        chat_id=chat_id,
+        user_id=user_id,
+        permissions=ChatPermissions(
+            can_send_messages=False
+        ),
+        until_date=until_date,
+    )
+
+
 async def mute_command(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
@@ -654,7 +737,6 @@ async def mute_command(
 
         try:
             minutes = int(context.args[0])
-
         except ValueError:
             minutes = 60
 
@@ -663,20 +745,13 @@ async def mute_command(
         min(minutes, 10080),
     )
 
-    until_date = (
-        datetime.now(timezone.utc)
-        + timedelta(minutes=minutes)
-    )
-
     try:
 
-        await context.bot.restrict_chat_member(
-            chat_id=update.effective_chat.id,
-            user_id=target.id,
-            permissions=ChatPermissions(
-                can_send_messages=False
-            ),
-            until_date=until_date,
+        await mute_user(
+            context.bot,
+            update.effective_chat.id,
+            target.id,
+            minutes,
         )
 
         await update.message.reply_text(
@@ -700,6 +775,30 @@ async def mute_command(
 # UNMUTE
 # =========================================================
 
+async def unmute_user(
+    bot,
+    chat_id,
+    user_id,
+):
+
+    await bot.restrict_chat_member(
+        chat_id=chat_id,
+        user_id=user_id,
+        permissions=ChatPermissions(
+            can_send_messages=True,
+            can_send_audios=True,
+            can_send_documents=True,
+            can_send_photos=True,
+            can_send_videos=True,
+            can_send_video_notes=True,
+            can_send_voice_notes=True,
+            can_send_polls=True,
+            can_send_other_messages=True,
+            can_add_web_page_previews=True,
+        ),
+    )
+
+
 async def unmute_command(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
@@ -720,21 +819,10 @@ async def unmute_command(
 
     try:
 
-        await context.bot.restrict_chat_member(
-            chat_id=update.effective_chat.id,
-            user_id=target.id,
-            permissions=ChatPermissions(
-                can_send_messages=True,
-                can_send_audios=True,
-                can_send_documents=True,
-                can_send_photos=True,
-                can_send_videos=True,
-                can_send_video_notes=True,
-                can_send_voice_notes=True,
-                can_send_polls=True,
-                can_send_other_messages=True,
-                can_add_web_page_previews=True,
-            ),
+        await unmute_user(
+            context.bot,
+            update.effective_chat.id,
+            target.id,
         )
 
         await update.message.reply_text(
@@ -756,6 +844,18 @@ async def unmute_command(
 # =========================================================
 # BAN
 # =========================================================
+
+async def ban_user(
+    bot,
+    chat_id,
+    user_id,
+):
+
+    await bot.ban_chat_member(
+        chat_id=chat_id,
+        user_id=user_id,
+    )
+
 
 async def ban_command(
     update: Update,
@@ -785,9 +885,10 @@ async def ban_command(
 
     try:
 
-        await context.bot.ban_chat_member(
-            chat_id=update.effective_chat.id,
-            user_id=target.id,
+        await ban_user(
+            context.bot,
+            update.effective_chat.id,
+            target.id,
         )
 
         await update.message.reply_text(
@@ -962,9 +1063,6 @@ async def rules_command(
     context: ContextTypes.DEFAULT_TYPE,
 ):
 
-    if not update.message:
-        return
-
     rules = """
 📜 قوانین کافه فیلم بین و ضربان موزیک
 
@@ -1034,6 +1132,536 @@ async def admins_command(
 
 
 # =========================================================
+# PANEL
+# =========================================================
+
+async def panel_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+
+    if not await require_admin(update):
+        return
+
+    message = update.message
+
+    target = get_target_user(message)
+
+    if not target:
+
+        await message.reply_text(
+            "🛡️ برای باز کردن پنل مدیریت، "
+            "ابتدا روی پیام کاربر Reply کن و سپس /panel بزن."
+        )
+
+        return
+
+    if await is_admin(update, target.id):
+
+        await message.reply_text(
+            "❌ پنل مدیریت روی مدیران گروه قابل اجرا نیست."
+        )
+
+        return
+
+    keyboard = [
+        [
+            InlineKeyboardButton(
+                "⚠️ اخطار",
+                callback_data=f"warn:{target.id}",
+            ),
+            InlineKeyboardButton(
+                "🔇 میوت",
+                callback_data=f"mute:{target.id}",
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                "🔊 رفع میوت",
+                callback_data=f"unmute:{target.id}",
+            ),
+            InlineKeyboardButton(
+                "🗑 حذف پیام",
+                callback_data=f"del:{message.reply_to_message.message_id}",
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                "🚫 بن",
+                callback_data=f"ban:{target.id}",
+            ),
+            InlineKeyboardButton(
+                "👢 اخراج",
+                callback_data=f"kick:{target.id}",
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                "⚠️ تعداد اخطار",
+                callback_data=f"warnings:{target.id}",
+            ),
+            InlineKeyboardButton(
+                "♻️ پاک کردن اخطار",
+                callback_data=f"clearwarn:{target.id}",
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                "📊 آمار گروه",
+                callback_data="members",
+            ),
+            InlineKeyboardButton(
+                "👑 مدیران",
+                callback_data="admins",
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                "📜 قوانین",
+                callback_data="rules",
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                "❌ بستن پنل",
+                callback_data="close",
+            ),
+        ],
+    ]
+
+    markup = InlineKeyboardMarkup(keyboard)
+
+    await message.reply_text(
+        f"🛡️ پنل مدیریت\n\n"
+        f"👤 کاربر هدف: {target.first_name}\n"
+        f"🆔 `{target.id}`\n\n"
+        "یکی از گزینه‌ها را انتخاب کن:",
+        reply_markup=markup,
+        parse_mode="Markdown",
+    )
+
+
+# =========================================================
+# PANEL CALLBACK
+# =========================================================
+
+async def panel_callback(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+
+    query = update.callback_query
+
+    if not query:
+        return
+
+    await query.answer()
+
+    # بررسی مدیر بودن کسی که دکمه را زده
+    if not await query_user_is_admin(
+        query,
+        query.from_user.id,
+    ):
+
+        await query.answer(
+            "⛔ فقط مدیران گروه می‌توانند از پنل استفاده کنند.",
+            show_alert=True,
+        )
+
+        return
+
+    data = query.data or ""
+
+    chat_id = query.message.chat.id
+
+    # =====================================================
+    # CLOSE
+    # =====================================================
+
+    if data == "close":
+
+        try:
+            await query.message.delete()
+
+        except Exception:
+            pass
+
+        return
+
+    # =====================================================
+    # MEMBERS
+    # =====================================================
+
+    if data == "members":
+
+        try:
+
+            count = await context.bot.get_chat_member_count(
+                chat_id
+            )
+
+            await query.message.reply_text(
+                f"📊 تعداد اعضای گروه:\n\n{count}"
+            )
+
+        except Exception as e:
+
+            logger.error(
+                "Panel members error: %s",
+                e,
+            )
+
+        return
+
+    # =====================================================
+    # ADMINS
+    # =====================================================
+
+    if data == "admins":
+
+        try:
+
+            admins = await context.bot.get_chat_administrators(
+                chat_id
+            )
+
+            text = "👑 مدیران گروه:\n\n"
+
+            for admin in admins:
+
+                user = admin.user
+
+                if user.username:
+
+                    text += (
+                        f"• {user.first_name} "
+                        f"(@{user.username})\n"
+                    )
+
+                else:
+
+                    text += (
+                        f"• {user.first_name}\n"
+                    )
+
+            await query.message.reply_text(text)
+
+        except Exception as e:
+
+            logger.error(
+                "Panel admins error: %s",
+                e,
+            )
+
+        return
+
+    # =====================================================
+    # RULES
+    # =====================================================
+
+    if data == "rules":
+
+        rules = """
+📜 قوانین کافه فیلم بین و ضربان موزیک
+
+1️⃣ احترام به اعضای گروه الزامی است.
+2️⃣ توهین و مزاحمت ممنوع است.
+3️⃣ اسپم و تبلیغات بدون اجازه ممنوع است.
+4️⃣ درخواست فیلم، سریال و موزیک را واضح ارسال کنید.
+5️⃣ ارسال محتوای نامرتبط ممنوع است.
+6️⃣ دستورات مدیران گروه باید رعایت شود.
+"""
+
+        await query.message.reply_text(rules)
+
+        return
+
+    # =====================================================
+    # PARSE TARGET
+    # =====================================================
+
+    parts = data.split(":")
+
+    if len(parts) != 2:
+        return
+
+    action = parts[0]
+
+    try:
+
+        target_id = int(parts[1])
+
+    except ValueError:
+
+        return
+
+    # =====================================================
+    # TARGET ADMIN CHECK
+    # =====================================================
+
+    if action in (
+        "warn",
+        "mute",
+        "unmute",
+        "ban",
+        "kick",
+        "clearwarn",
+        "warnings",
+    ):
+
+        try:
+
+            target_member = await context.bot.get_chat_member(
+                chat_id,
+                target_id,
+            )
+
+            if target_member.status in (
+                ChatMemberStatus.ADMINISTRATOR,
+                ChatMemberStatus.OWNER,
+            ):
+
+                await query.answer(
+                    "❌ این کاربر مدیر گروه است.",
+                    show_alert=True,
+                )
+
+                return
+
+        except Exception as e:
+
+            logger.error(
+                "Target admin check error: %s",
+                e,
+            )
+
+    # =====================================================
+    # WARN
+    # =====================================================
+
+    if action == "warn":
+
+        add_warning(
+            chat_id,
+            target_id,
+            query.from_user.id,
+            "اخطار از طریق پنل مدیریت",
+        )
+
+        count = get_warning_count(
+            chat_id,
+            target_id,
+        )
+
+        try:
+
+            member = await context.bot.get_chat_member(
+                chat_id,
+                target_id,
+            )
+
+            name = member.user.first_name
+
+        except Exception:
+
+            name = "کاربر"
+
+        await query.message.reply_text(
+            f"⚠️ اخطار ثبت شد.\n\n"
+            f"👤 کاربر: {name}\n"
+            f"🔢 تعداد اخطار: {count}/3"
+        )
+
+        if count >= 3:
+
+            try:
+
+                await mute_user(
+                    context.bot,
+                    chat_id,
+                    target_id,
+                    60,
+                )
+
+                await query.message.reply_text(
+                    f"🔇 {name} به دلیل رسیدن به "
+                    "۳ اخطار، به مدت ۱ ساعت میوت شد."
+                )
+
+            except Exception as e:
+
+                logger.error(
+                    "Panel auto mute error: %s",
+                    e,
+                )
+
+        return
+
+    # =====================================================
+    # WARNINGS
+    # =====================================================
+
+    if action == "warnings":
+
+        count = get_warning_count(
+            chat_id,
+            target_id,
+        )
+
+        await query.message.reply_text(
+            f"⚠️ تعداد اخطارهای کاربر:\n\n{count}"
+        )
+
+        return
+
+    # =====================================================
+    # CLEAR WARNINGS
+    # =====================================================
+
+    if action == "clearwarn":
+
+        clear_warnings(
+            chat_id,
+            target_id,
+        )
+
+        await query.message.reply_text(
+            "✅ تمام اخطارهای کاربر پاک شد."
+        )
+
+        return
+
+    # =====================================================
+    # MUTE
+    # =====================================================
+
+    if action == "mute":
+
+        try:
+
+            await mute_user(
+                context.bot,
+                chat_id,
+                target_id,
+                60,
+            )
+
+            await query.message.reply_text(
+                "🔇 کاربر به مدت ۶۰ دقیقه میوت شد."
+            )
+
+        except Exception as e:
+
+            logger.error(
+                "Panel mute error: %s",
+                e,
+            )
+
+            await query.message.reply_text(
+                "❌ میوت انجام نشد."
+            )
+
+        return
+
+    # =====================================================
+    # UNMUTE
+    # =====================================================
+
+    if action == "unmute":
+
+        try:
+
+            await unmute_user(
+                context.bot,
+                chat_id,
+                target_id,
+            )
+
+            await query.message.reply_text(
+                "🔊 میوت کاربر برداشته شد."
+            )
+
+        except Exception as e:
+
+            logger.error(
+                "Panel unmute error: %s",
+                e,
+            )
+
+            await query.message.reply_text(
+                "❌ رفع میوت انجام نشد."
+            )
+
+        return
+
+    # =====================================================
+    # BAN
+    # =====================================================
+
+    if action == "ban":
+
+        try:
+
+            await ban_user(
+                context.bot,
+                chat_id,
+                target_id,
+            )
+
+            await query.message.reply_text(
+                "🚫 کاربر از گروه بن شد."
+            )
+
+        except Exception as e:
+
+            logger.error(
+                "Panel ban error: %s",
+                e,
+            )
+
+            await query.message.reply_text(
+                "❌ بن انجام نشد."
+            )
+
+        return
+
+    # =====================================================
+    # KICK
+    # =====================================================
+
+    if action == "kick":
+
+        try:
+
+            await context.bot.ban_chat_member(
+                chat_id=chat_id,
+                user_id=target_id,
+            )
+
+            await context.bot.unban_chat_member(
+                chat_id=chat_id,
+                user_id=target_id,
+            )
+
+            await query.message.reply_text(
+                "👢 کاربر از گروه اخراج شد."
+            )
+
+        except Exception as e:
+
+            logger.error(
+                "Panel kick error: %s",
+                e,
+            )
+
+            await query.message.reply_text(
+                "❌ اخراج انجام نشد."
+            )
+
+        return
+
+
+# =========================================================
 # UNKNOWN COMMAND
 # =========================================================
 
@@ -1071,7 +1699,6 @@ async def error_handler(
 
 def main():
 
-    # اتصال و ساخت جداول دیتابیس
     init_db()
 
     application = (
@@ -1144,8 +1771,20 @@ def main():
         CommandHandler("admins", admins_command)
     )
 
+    application.add_handler(
+        CommandHandler("panel", panel_command)
+    )
+
     # =====================================================
-    # NEW MEMBER
+    # CALLBACK BUTTONS
+    # =====================================================
+
+    application.add_handler(
+        CallbackQueryHandler(panel_callback)
+    )
+
+    # =====================================================
+    # NEW MEMBERS
     # =====================================================
 
     application.add_handler(
@@ -1156,7 +1795,7 @@ def main():
     )
 
     # =====================================================
-    # UNKNOWN COMMAND
+    # UNKNOWN COMMANDS
     # =====================================================
 
     application.add_handler(
@@ -1188,7 +1827,7 @@ def main():
 
 
 # =========================================================
-# START BOT
+# START
 # =========================================================
 
 if __name__ == "__main__":
