@@ -31,9 +31,14 @@ from telegram.ext import (
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 DATABASE_URL = os.getenv("DATABASE_URL")
-ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 
-# حذف پیام خوش‌آمدگویی بعد از 3 دقیقه
+try:
+    ADMIN_ID = int(os.getenv("ADMIN_ID", "0").strip())
+except (TypeError, ValueError):
+    ADMIN_ID = 0
+
+
+# حذف پیام خوش آمدگویی بعد از 3 دقیقه
 WELCOME_DELETE_SECONDS = 180
 
 
@@ -58,6 +63,11 @@ if not BOT_TOKEN:
 
 if not DATABASE_URL:
     raise RuntimeError("DATABASE_URL is not set")
+
+if not ADMIN_ID:
+    logger.warning(
+        "ADMIN_ID is not set. Main admin access is disabled."
+    )
 
 
 # =========================================================
@@ -175,10 +185,27 @@ def clear_warnings(chat_id, user_id):
 
 
 # =========================================================
-# ADMIN CHECK
+# ADMIN SYSTEM
 # =========================================================
 
-async def is_admin(update: Update, user_id: int = None):
+def is_main_admin(user_id: int) -> bool:
+
+    """
+    مدیر اصلی ربات.
+    اگر User ID با ADMIN_ID یکی باشد،
+    بدون نیاز به بررسی مدیر بودن در گروه دسترسی دارد.
+    """
+
+    return (
+        ADMIN_ID != 0
+        and user_id == ADMIN_ID
+    )
+
+
+async def is_group_admin(
+    update: Update,
+    user_id: int = None,
+) -> bool:
 
     if not update.effective_chat:
         return False
@@ -190,9 +217,16 @@ async def is_admin(update: Update, user_id: int = None):
 
         user_id = update.effective_user.id
 
-    # مدیر اصلی
-    if ADMIN_ID and user_id == ADMIN_ID:
+    # -----------------------------------------------------
+    # MAIN ADMIN
+    # -----------------------------------------------------
+
+    if is_main_admin(user_id):
         return True
+
+    # -----------------------------------------------------
+    # GROUP ADMIN
+    # -----------------------------------------------------
 
     try:
 
@@ -208,38 +242,67 @@ async def is_admin(update: Update, user_id: int = None):
     except Exception as e:
 
         logger.error(
-            "Admin check error: %s",
+            "Group admin check error: %s",
             e,
         )
 
         return False
 
 
-async def require_admin(update: Update):
+async def require_admin(update: Update) -> bool:
 
-    if not await is_admin(update):
-
-        if update.message:
-
-            await update.message.reply_text(
-                "⛔ این دستور فقط برای مدیران گروه است."
-            )
-
+    if not update.effective_user:
         return False
 
-    return True
+    user_id = update.effective_user.id
+
+    # =====================================================
+    # MAIN ADMIN
+    # =====================================================
+
+    if is_main_admin(user_id):
+        return True
+
+    # =====================================================
+    # GROUP ADMIN
+    # =====================================================
+
+    if await is_group_admin(update, user_id):
+        return True
+
+    # =====================================================
+    # ACCESS DENIED
+    # =====================================================
+
+    if update.message:
+
+        await update.message.reply_text(
+            "⛔ شما دسترسی مدیریت این ربات را ندارید."
+        )
+
+    return False
 
 
 async def query_user_is_admin(
     query,
-    user_id,
-):
+    user_id: int,
+) -> bool:
 
-    # ADMIN_ID
-    if ADMIN_ID and user_id == ADMIN_ID:
+    # =====================================================
+    # MAIN ADMIN
+    # =====================================================
+
+    if is_main_admin(user_id):
         return True
 
+    # =====================================================
+    # GROUP ADMIN
+    # =====================================================
+
     try:
+
+        if not query.message:
+            return False
 
         member = await query.message.chat.get_member(
             user_id
@@ -392,9 +455,13 @@ async def help_command(
 
 ━━━━━━━━━━━━━━
 
-📌 برای دستورات مدیریتی:
+📌 برای مدیریت یک کاربر:
 روی پیام کاربر Reply کنید.
+
+📌 برای باز کردن پنل عمومی:
+/panel
 """
+
 
     await update.message.reply_text(text)
 
@@ -551,7 +618,7 @@ async def warn_command(
 
         return
 
-    if await is_admin(update, target.id):
+    if await is_group_admin(update, target.id):
 
         await message.reply_text(
             "❌ نمی‌توان به مدیر گروه اخطار داد."
@@ -585,20 +652,13 @@ async def warn_command(
 
     if count >= 3:
 
-        until_date = (
-            datetime.now(timezone.utc)
-            + timedelta(hours=1)
-        )
-
         try:
 
-            await context.bot.restrict_chat_member(
-                chat_id=update.effective_chat.id,
-                user_id=target.id,
-                permissions=ChatPermissions(
-                    can_send_messages=False
-                ),
-                until_date=until_date,
+            await mute_user(
+                context.bot,
+                update.effective_chat.id,
+                target.id,
+                60,
             )
 
             await message.reply_text(
@@ -723,7 +783,7 @@ async def mute_command(
 
         return
 
-    if await is_admin(update, target.id):
+    if await is_group_admin(update, target.id):
 
         await update.message.reply_text(
             "❌ نمی‌توان مدیر گروه را میوت کرد."
@@ -875,7 +935,7 @@ async def ban_command(
 
         return
 
-    if await is_admin(update, target.id):
+    if await is_group_admin(update, target.id):
 
         await update.message.reply_text(
             "❌ نمی‌توان مدیر گروه را بن کرد."
@@ -975,7 +1035,7 @@ async def kick_command(
 
         return
 
-    if await is_admin(update, target.id):
+    if await is_group_admin(update, target.id):
 
         await update.message.reply_text(
             "❌ نمی‌توان مدیر گروه را اخراج کرد."
@@ -1132,6 +1192,30 @@ async def admins_command(
 
 
 # =========================================================
+# ADMIN ID TEST
+# =========================================================
+
+async def adminid_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+
+    if not update.message:
+        return
+
+    user_id = update.effective_user.id
+
+    await update.message.reply_text(
+        f"🆔 User ID شما:\n"
+        f"{user_id}\n\n"
+        f"🔐 ADMIN_ID ربات:\n"
+        f"{ADMIN_ID}\n\n"
+        f"✅ مدیر اصلی:\n"
+        f"{'بله' if is_main_admin(user_id) else 'خیر'}"
+    )
+
+
+# =========================================================
 # PANEL
 # =========================================================
 
@@ -1140,71 +1224,119 @@ async def panel_command(
     context: ContextTypes.DEFAULT_TYPE,
 ):
 
+    # =====================================================
+    # ADMIN ACCESS
+    # =====================================================
+
     if not await require_admin(update):
         return
 
     message = update.message
 
+    if not message:
+        return
+
+    # =====================================================
+    # TARGET USER
+    # =====================================================
+
     target = get_target_user(message)
 
-    if not target:
+    # =====================================================
+    # USER PANEL
+    # =====================================================
+
+    if target:
+
+        if await is_group_admin(update, target.id):
+
+            await message.reply_text(
+                "❌ پنل مدیریتی برای مدیران گروه قابل اجرا نیست."
+            )
+
+            return
+
+        keyboard = [
+            [
+                InlineKeyboardButton(
+                    "⚠️ اخطار",
+                    callback_data=f"warn:{target.id}",
+                ),
+                InlineKeyboardButton(
+                    "🔇 میوت",
+                    callback_data=f"mute:{target.id}",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    "🔊 رفع میوت",
+                    callback_data=f"unmute:{target.id}",
+                ),
+                InlineKeyboardButton(
+                    "🗑 حذف پیام",
+                    callback_data=f"del:{message.reply_to_message.message_id}",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    "🚫 بن",
+                    callback_data=f"ban:{target.id}",
+                ),
+                InlineKeyboardButton(
+                    "👢 اخراج",
+                    callback_data=f"kick:{target.id}",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    "⚠️ تعداد اخطار",
+                    callback_data=f"warnings:{target.id}",
+                ),
+                InlineKeyboardButton(
+                    "♻️ پاک کردن اخطار",
+                    callback_data=f"clearwarn:{target.id}",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    "📊 آمار گروه",
+                    callback_data="members",
+                ),
+                InlineKeyboardButton(
+                    "👑 مدیران",
+                    callback_data="admins",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    "📜 قوانین",
+                    callback_data="rules",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    "❌ بستن پنل",
+                    callback_data="close",
+                ),
+            ],
+        ]
 
         await message.reply_text(
-            "🛡️ برای باز کردن پنل مدیریت، "
-            "ابتدا روی پیام کاربر Reply کن و سپس /panel بزن."
+            f"🛡️ پنل مدیریت کاربر\n\n"
+            f"👤 کاربر: {target.first_name}\n"
+            f"🆔 `{target.id}`\n\n"
+            "یکی از گزینه‌ها را انتخاب کن:",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode="Markdown",
         )
 
         return
 
-    if await is_admin(update, target.id):
-
-        await message.reply_text(
-            "❌ پنل مدیریت روی مدیران گروه قابل اجرا نیست."
-        )
-
-        return
+    # =====================================================
+    # GENERAL PANEL
+    # =====================================================
 
     keyboard = [
-        [
-            InlineKeyboardButton(
-                "⚠️ اخطار",
-                callback_data=f"warn:{target.id}",
-            ),
-            InlineKeyboardButton(
-                "🔇 میوت",
-                callback_data=f"mute:{target.id}",
-            ),
-        ],
-        [
-            InlineKeyboardButton(
-                "🔊 رفع میوت",
-                callback_data=f"unmute:{target.id}",
-            ),
-            InlineKeyboardButton(
-                "🗑 حذف پیام",
-                callback_data=f"del:{message.reply_to_message.message_id}",
-            ),
-        ],
-        [
-            InlineKeyboardButton(
-                "🚫 بن",
-                callback_data=f"ban:{target.id}",
-            ),
-            InlineKeyboardButton(
-                "👢 اخراج",
-                callback_data=f"kick:{target.id}",
-            ),
-        ],
-        [
-            InlineKeyboardButton(
-                "⚠️ تعداد اخطار",
-                callback_data=f"warnings:{target.id}",
-            ),
-            InlineKeyboardButton(
-                "♻️ پاک کردن اخطار",
-                callback_data=f"clearwarn:{target.id}",
-            ),
-        ],
         [
             InlineKeyboardButton(
                 "📊 آمار گروه",
@@ -1229,15 +1361,12 @@ async def panel_command(
         ],
     ]
 
-    markup = InlineKeyboardMarkup(keyboard)
-
     await message.reply_text(
-        f"🛡️ پنل مدیریت\n\n"
-        f"👤 کاربر هدف: {target.first_name}\n"
-        f"🆔 `{target.id}`\n\n"
-        "یکی از گزینه‌ها را انتخاب کن:",
-        reply_markup=markup,
-        parse_mode="Markdown",
+        "🛡️ پنل مدیریت فیلم‌بین\n\n"
+        "مدیریت گروه از طریق گزینه‌های زیر انجام می‌شود.\n\n"
+        "💡 برای مدیریت یک کاربر:\n"
+        "روی پیام آن کاربر Reply کن و دوباره /panel را بزن.",
+        reply_markup=InlineKeyboardMarkup(keyboard),
     )
 
 
@@ -1255,22 +1384,28 @@ async def panel_callback(
     if not query:
         return
 
-    await query.answer()
+    # =====================================================
+    # ADMIN ACCESS
+    # =====================================================
 
-    # بررسی مدیر بودن کسی که دکمه را زده
     if not await query_user_is_admin(
         query,
         query.from_user.id,
     ):
 
         await query.answer(
-            "⛔ فقط مدیران گروه می‌توانند از پنل استفاده کنند.",
+            "⛔ شما دسترسی مدیریت این ربات را ندارید.",
             show_alert=True,
         )
 
         return
 
+    await query.answer()
+
     data = query.data or ""
+
+    if not query.message:
+        return
 
     chat_id = query.message.chat.id
 
@@ -1281,9 +1416,11 @@ async def panel_callback(
     if data == "close":
 
         try:
+
             await query.message.delete()
 
         except Exception:
+
             pass
 
         return
@@ -1373,6 +1510,40 @@ async def panel_callback(
 """
 
         await query.message.reply_text(rules)
+
+        return
+
+    # =====================================================
+    # DELETE BUTTON
+    # =====================================================
+
+    if data.startswith("del:"):
+
+        try:
+
+            target_message_id = int(
+                data.split(":", 1)[1]
+            )
+
+            await context.bot.delete_message(
+                chat_id=chat_id,
+                message_id=target_message_id,
+            )
+
+            await query.message.reply_text(
+                "🗑️ پیام حذف شد."
+            )
+
+        except Exception as e:
+
+            logger.error(
+                "Panel delete error: %s",
+                e,
+            )
+
+            await query.message.reply_text(
+                "❌ حذف پیام انجام نشد."
+            )
 
         return
 
@@ -1724,6 +1895,10 @@ def main():
     )
 
     application.add_handler(
+        CommandHandler("adminid", adminid_command)
+    )
+
+    application.add_handler(
         CommandHandler("members", members_command)
     )
 
@@ -1817,6 +1992,11 @@ def main():
         "Cafe Film Bin + Zaraban Music Bot started"
     )
 
+    logger.info(
+        "ADMIN_ID = %s",
+        ADMIN_ID,
+    )
+
     # =====================================================
     # RUN
     # =====================================================
@@ -1832,3 +2012,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+```
